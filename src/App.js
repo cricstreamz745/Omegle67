@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
-// Change this to your Render backend URL
 const socket = io("https://omegle-25ce.onrender.com");
 
 function App() {
@@ -11,57 +10,73 @@ function App() {
   const [status, setStatus] = useState("Connecting...");
 
   useEffect(() => {
+    let localStream;
+
     const start = async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.current.srcObject = stream;
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.current.srcObject = localStream;
 
-      socket.on("waiting", () => setStatus("Waiting for a partner..."));
+        // When waiting
+        socket.on("waiting", () => setStatus("Waiting for a partner..."));
 
-      socket.on("partner-found", async () => {
-        setStatus("Connected!");
+        // When paired
+        socket.on("partner-found", async () => {
+          setStatus("Connected!");
 
-        peerConnection.current = new RTCPeerConnection();
+          peerConnection.current = new RTCPeerConnection();
 
-        // Send local stream
-        stream.getTracks().forEach(track => peerConnection.current.addTrack(track, stream));
+          // Add local stream tracks
+          localStream.getTracks().forEach(track =>
+            peerConnection.current.addTrack(track, localStream)
+          );
 
-        peerConnection.current.ontrack = (event) => {
-          remoteVideo.current.srcObject = event.streams[0];
-        };
+          // Show remote stream
+          peerConnection.current.ontrack = (event) => {
+            remoteVideo.current.srcObject = event.streams[0];
+          };
 
-        peerConnection.current.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit("signal", { candidate: event.candidate });
-          }
-        };
-
-        socket.on("signal", async ({ data }) => {
-          if (data.sdp) {
-            await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
-            if (data.sdp.type === "offer") {
-              const answer = await peerConnection.current.createAnswer();
-              await peerConnection.current.setLocalDescription(answer);
-              socket.emit("signal", { sdp: peerConnection.current.localDescription });
+          // Send ICE candidates
+          peerConnection.current.onicecandidate = (event) => {
+            if (event.candidate) {
+              socket.emit("signal", { candidate: event.candidate });
             }
-          } else if (data.candidate) {
-            try {
-              await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-            } catch (err) {
-              console.error("Error adding ICE candidate:", err);
+          };
+
+          // Handle signals
+          socket.on("signal", async ({ data }) => {
+            if (data.sdp) {
+              await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              if (data.sdp.type === "offer") {
+                const answer = await peerConnection.current.createAnswer();
+                await peerConnection.current.setLocalDescription(answer);
+                socket.emit("signal", { sdp: peerConnection.current.localDescription });
+              }
+            } else if (data.candidate) {
+              try {
+                await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+              } catch (err) {
+                console.error("Error adding ICE candidate", err);
+              }
             }
+          });
+
+          // Only create offer if this client initiated connection
+          if (!peerConnection.current.currentRemoteDescription) {
+            const offer = await peerConnection.current.createOffer();
+            await peerConnection.current.setLocalDescription(offer);
+            socket.emit("signal", { sdp: peerConnection.current.localDescription });
           }
         });
 
-        // Create & send offer
-        const offer = await peerConnection.current.createOffer();
-        await peerConnection.current.setLocalDescription(offer);
-        socket.emit("signal", { sdp: offer });
-      });
-
-      socket.on("partner-disconnected", () => {
-        setStatus("Partner disconnected. Refresh to find a new one.");
-        if (peerConnection.current) peerConnection.current.close();
-      });
+        socket.on("partner-disconnected", () => {
+          setStatus("Partner disconnected. Refresh to find a new one.");
+          if (peerConnection.current) peerConnection.current.close();
+        });
+      } catch (err) {
+        console.error("Error accessing media devices.", err);
+        setStatus("Error: could not access camera/mic");
+      }
     };
 
     start();

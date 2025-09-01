@@ -1,8 +1,27 @@
 import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
-// 👉 Change this to your backend URL
 const socket = io("https://omegle-25ce.onrender.com");
+
+// 🔹 Function to fetch ICE servers from Xirsys
+async function getIceServers() {
+  try {
+    const res = await fetch("https://global.xirsys.net/_turn/MyFirstApp", {
+      method: "PUT",
+      headers: {
+        "Authorization": "Basic " + btoa("princejha:c4838450-86f6-11f0-b5f2-0242ac140003"),
+        "Content-Type": "application/json"
+      }
+    });
+
+    const data = await res.json();
+    console.log("[DEBUG] ICE Servers from Xirsys:", data.v.iceServers);
+    return data.v.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+  } catch (err) {
+    console.error("[ERROR] Fetching ICE servers failed, falling back to STUN:", err);
+    return [{ urls: "stun:stun.l.google.com:19302" }];
+  }
+}
 
 function App() {
   const localVideo = useRef();
@@ -20,24 +39,20 @@ function App() {
         localVideo.current.srcObject = localStream;
         console.log("[DEBUG] Local stream captured");
 
+        const iceServers = await getIceServers();
+
         socket.on("waiting", () => {
           setStatus("Waiting for a partner...");
           console.log("[DEBUG] Waiting for partner...");
         });
 
         socket.on("partner-found", async () => {
-          setStatus("Connected!");
+          setStatus("Partner found! Setting up connection...");
           console.log("[DEBUG] Partner found, creating RTCPeerConnection...");
 
-          // ✅ Add STUN servers
-          peerConnection.current = new RTCPeerConnection({
-            iceServers: [
-              { urls: "stun:stun.l.google.com:19302" },
-              { urls: "stun:stun1.l.google.com:19302" }
-            ]
-          });
+          peerConnection.current = new RTCPeerConnection({ iceServers });
 
-          // ✅ Add local stream tracks
+          // ✅ Add local tracks
           localStream.getTracks().forEach(track => {
             peerConnection.current.addTrack(track, localStream);
             console.log("[DEBUG] Added local track:", track.kind);
@@ -57,7 +72,7 @@ function App() {
             }
           };
 
-          // ✅ Handle incoming signals
+          // ✅ Incoming signals
           socket.on("signal", async ({ data }) => {
             console.log("[DEBUG] Signal received:", data);
 
@@ -81,7 +96,7 @@ function App() {
             }
           });
 
-          // ✅ Create and send offer (only if not already set)
+          // ✅ Create offer if needed
           if (!peerConnection.current.currentRemoteDescription) {
             const offer = await peerConnection.current.createOffer();
             await peerConnection.current.setLocalDescription(offer);
@@ -112,8 +127,8 @@ function App() {
         <video ref={remoteVideo} autoPlay playsInline width="300" style={{ border: "2px solid black" }} />
       </div>
       <p style={{ marginTop: "20px", fontSize: "14px", color: "gray" }}>
-        Open this page in two different devices or tabs to test.
-        Check browser console logs (F12) for debug info.
+        Open this page in two different browsers or devices to test.<br />
+        Check the browser console (<b>F12 → Console</b>) for debug logs.
       </p>
     </div>
   );
